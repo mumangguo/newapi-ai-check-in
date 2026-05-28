@@ -102,34 +102,6 @@ jobs:
         key: balance-hash-${{ hashFiles('balance_hash.txt') }}
         restore-keys: |
           balance-hash-
-            
-    - name: 拉取动态代理 IP
-      id: fetch-proxy
-      env:
-        TIANQI_PROXY_API: ${{ secrets.TIANQI_PROXY_API }}
-      run: |
-        if (-not $env:TIANQI_PROXY_API) {
-          echo "ℹ️ 未配置 TIANQI_PROXY_API，跳过动态代理拉取"
-          exit 0
-        }
-        $maxRetry = 5
-        for ($i = 1; $i -le $maxRetry; $i++) {
-          try {
-            $resp = (Invoke-WebRequest -Uri $env:TIANQI_PROXY_API -UseBasicParsing -TimeoutSec 15).Content.Trim()
-          } catch {
-            echo "第 $i 次请求异常: $_"
-            Start-Sleep -Seconds 3
-            continue
-          }
-          if ($resp -match '^\d{1,3}(\.\d{1,3}){3}:\d+$') {
-            echo "✅ 拿到代理: $resp"
-            echo "proxy=http://$resp" >> $env:GITHUB_OUTPUT
-            exit 0
-          }
-          echo "第 $i 次返回非法内容: $resp"
-          Start-Sleep -Seconds 3
-        }
-        echo "::warning::拉取代理失败 $maxRetry 次，本次将不使用代理"
 
     - name: 执行签到
       env:
@@ -137,7 +109,7 @@ jobs:
         ACCOUNTS_LINUX_DO: ${{ secrets.ACCOUNTS_LINUX_DO }}
         ACCOUNTS_GITHUB: ${{ secrets.ACCOUNTS_GITHUB }}
         PROVIDERS: ${{ inputs.providers || secrets.PROVIDERS }}
-        PROXY: ${{ steps.fetch-proxy.outputs.proxy || secrets.PROXY }}
+        PROXY: ${{ secrets.PROXY }}
         STORATE_STATES_GITHUB: ${{ secrets.STORATE_STATES_GITHUB }}
         STORATE_STATES_LINUXDO: ${{ secrets.STORATE_STATES_LINUXDO }}
         DEBUG: ${{ github.event_name == 'workflow_dispatch' && inputs.debug || vars.DEBUG || 'false' }}
