@@ -105,10 +105,13 @@ jobs:
             
     - name: 拉取动态代理 IP
       id: fetch-proxy
-      if: ${{ secrets.TIANQI_PROXY_API != '' }}
       env:
         TIANQI_PROXY_API: ${{ secrets.TIANQI_PROXY_API }}
       run: |
+        if (-not $env:TIANQI_PROXY_API) {
+          echo "ℹ️ 未配置 TIANQI_PROXY_API，跳过动态代理拉取"
+          exit 0
+        }
         $maxRetry = 5
         for ($i = 1; $i -le $maxRetry; $i++) {
           try {
