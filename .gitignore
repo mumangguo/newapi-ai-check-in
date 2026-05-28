@@ -26,3 +26,6 @@ opencode.json
 
 # Git Worktree
 .worktree/
+
+# 账号
+accounts.json
