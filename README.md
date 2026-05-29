@@ -185,10 +185,11 @@ Affs:
 #### 3.3 字段说明：
 
 - `name` (可选)：自定义账号显示名称，用于通知和日志中标识账号
-- `provider` (可选)：供应商，内置 `anyrouter`、`wong`、`huan666`、`x666`、`kfc`、`elysiver`、`hotaru`默认使用 `anyrouter`
+- `provider` (可选)：供应商，内置 `anyrouter`、`wong`、`huan666`、`x666`、`kfc`、`elysiver`、`hotaru`、`xiaobai`，默认使用 `anyrouter`
 - `proxy` (可选)：单个账号代理配置，支持 `http`、`socks5` 代理
 - `cookies`(可选)：用于身份验证的 cookies 数据
 - `system_access_token`(可选)：系统访问令牌，通过 `Authorization: Bearer <token>` 方式认证签到
+- `xiaobai_token`(可选)：小白签到令牌，仅 `provider: "xiaobai"` 使用，只需配置 token 即可
 - `api_user`(cookies 或 system_access_token 设置时必需)：用于请求头的 new-api-user 参数
 - `linux.do`(可选)：用于登录身份验证，支持三种格式：
   - `true`：使用 `LINUX_DO_ACCOUNTS` 中的全局账号
@@ -271,7 +272,19 @@ Affs:
 }
 ```
 
-#### 3.8 `GitHub` 在新设备上登录会有两次验证
+#### 3.8 如何配置小白 token
+
+小白渠道使用独立的签到接口，不需要 `api_user`，只需要在账号配置里设置 `provider: "xiaobai"` 和 `xiaobai_token`。
+
+```json
+{
+  "name": "小白签到",
+  "provider": "xiaobai",
+  "xiaobai_token": "eyJ..."
+}
+```
+
+#### 3.9 `GitHub` 在新设备上登录会有两次验证
 
 通过打印日志中链接打开并输入验证码。
 

@@ -1138,6 +1138,108 @@ class CheckIn:
         finally:
             session.close()
 
+    async def check_in_with_xiaobai_token(
+        self,
+        access_token: str,
+        common_headers: dict,
+    ) -> tuple[bool, dict]:
+        """使用小白 token 执行签到操作"""
+        print(
+            f"ℹ️ {self.account_name}: Executing check-in with xiaobai token (using proxy: {'true' if self.http_proxy_config else 'false'})"
+        )
+
+        user_agent = common_headers.get("User-Agent", "")
+        impersonate = get_curl_cffi_impersonate(user_agent) if user_agent else "firefox135"
+
+        session = curl_requests.Session(impersonate=impersonate, proxy=self.http_proxy_config, timeout=30)
+        if impersonate:
+            print(f"ℹ️ {self.account_name}: Using curl_cffi Session with impersonate={impersonate}")
+
+        try:
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": common_headers.get("User-Agent", ""),
+            }
+
+            status_response = session.get(self.provider_config.get_status_url(), headers=headers, timeout=30)
+            if status_response.status_code != 200:
+                print(f"❌ {self.account_name}: Failed to get xiaobai status - HTTP {status_response.status_code}")
+                return False, {"error": f"Failed to get xiaobai status: HTTP {status_response.status_code}"}
+
+            status_data = response_resolve(status_response, "xiaobai_status", self.account_name)
+            if status_data is None:
+                return False, {"error": "Failed to get xiaobai status: Invalid response type (saved to logs)"}
+
+            if not status_data.get("ok", True):
+                error_msg = status_data.get("message", "Failed to get xiaobai status")
+                print(f"❌ {self.account_name}: {error_msg}")
+                return False, {"error": error_msg}
+
+            status_payload = status_data.get("data", {})
+            signed_today = status_payload.get("signedToday", False)
+            current_streak = status_payload.get("currentStreak", 0)
+            enabled = status_payload.get("config", {}).get("enabled", True)
+
+            print(
+                f"📊 {self.account_name}: XIAOBAI check-in status - "
+                f"Today: {'✅' if signed_today else '❌'}, "
+                f"Streak: {current_streak}, Enabled: {'✅' if enabled else '❌'}"
+            )
+
+            if not enabled:
+                return False, {"error": "Xiaobai check-in is disabled"}
+
+            reward = 0
+            if not signed_today:
+                print(f"🌐 {self.account_name}: Executing xiaobai check-in")
+                checkin_response = session.post(
+                    f"{self.provider_config.origin}/checkin/api/checkin",
+                    headers=headers,
+                    json={},
+                    timeout=30,
+                )
+                if checkin_response.status_code != 200:
+                    print(f"❌ {self.account_name}: Xiaobai check-in failed - HTTP {checkin_response.status_code}")
+                    return False, {"error": f"Xiaobai check-in failed: HTTP {checkin_response.status_code}"}
+
+                checkin_data = response_resolve(checkin_response, "xiaobai_checkin", self.account_name)
+                if checkin_data is None:
+                    return False, {"error": "Xiaobai check-in failed: Invalid response type (saved to logs)"}
+
+                if not checkin_data.get("ok", True):
+                    error_msg = checkin_data.get("message", "Xiaobai check-in failed")
+                    print(f"❌ {self.account_name}: Xiaobai check-in failed - {error_msg}")
+                    return False, {"error": error_msg}
+
+                if checkin_data.get("alreadyChecked", False):
+                    signed_today = True
+                    print(f"ℹ️ {self.account_name}: Xiaobai already checked in today")
+                else:
+                    record = checkin_data.get("record", {})
+                    reward = record.get("reward_amount", 0)
+                    signed_today = True
+                    current_streak += 1
+                    print(f"✅ {self.account_name}: Xiaobai check-in successful! Reward: {reward}")
+
+            display = (
+                f"Xiaobai checked today: {'yes' if signed_today else 'no'}, "
+                f"streak: {current_streak}, reward: {reward}"
+            )
+            return True, {
+                "success": True,
+                "quota": reward,
+                "used_quota": 0,
+                "bonus_quota": current_streak,
+                "display": display,
+            }
+        except Exception as e:
+            print(f"❌ {self.account_name}: Error occurred during xiaobai check-in process - {e}")
+            return False, {"error": f"Xiaobai check-in process error - {e}"}
+        finally:
+            session.close()
+
     async def check_in_with_github(
         self,
         username: str,
@@ -1921,6 +2023,7 @@ class CheckIn:
         # 解析账号配置
         cookies_data = self.account_config.cookies
         system_access_token_data = self.account_config.system_access_token
+        xiaobai_token_data = self.account_config.xiaobai_token
         github_accounts = self.account_config.github  # 现在是 List[OAuthAccountConfig] 类型
         linuxdo_accounts = self.account_config.linux_do  # 现在是 List[OAuthAccountConfig] 类型
         site_accounts = self.account_config.site
@@ -1975,6 +2078,23 @@ class CheckIn:
             except Exception as e:
                 print(f"❌ {self.account_name}: System access token authentication error: {e}")
                 results.append(("system_access_token", False, {"error": str(e)}))
+
+        # 尝试 xiaobai token 认证
+        if xiaobai_token_data:
+            print(f"\nℹ️ {self.account_name}: Trying xiaobai token authentication")
+            try:
+                success, user_info = await self.check_in_with_xiaobai_token(
+                    xiaobai_token_data, common_headers
+                )
+                if success:
+                    print(f"✅ {self.account_name}: Xiaobai token authentication successful")
+                    results.append(("xiaobai_token", True, user_info))
+                else:
+                    print(f"❌ {self.account_name}: Xiaobai token authentication failed")
+                    results.append(("xiaobai_token", False, user_info))
+            except Exception as e:
+                print(f"❌ {self.account_name}: Xiaobai token authentication error: {e}")
+                results.append(("xiaobai_token", False, {"error": str(e)}))
 
         # 尝试 GitHub 认证（支持多个账号）
         if github_accounts:
