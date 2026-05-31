@@ -235,6 +235,22 @@ class SiteAccountConfig:
 
 
 @dataclass
+class XiaobaiTokenConfig:
+    """小白 token 配置"""
+
+    access_token: str
+    refresh_token: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "XiaobaiTokenConfig":
+        """从字典创建 XiaobaiTokenConfig"""
+        return cls(
+            access_token=data.get("access_token", ""),
+            refresh_token=data.get("refresh_token", ""),
+        )
+
+
+@dataclass
 class AccountConfig:
     """账号配置"""
 
@@ -246,7 +262,7 @@ class AccountConfig:
     github: List["OAuthAccountConfig"] | None = None  # 改为列表类型
     site: List["SiteAccountConfig"] | None = None
     system_access_token: dict | str = ""
-    xiaobai_token: str = ""
+    xiaobai_token: XiaobaiTokenConfig | None = None
     proxy: dict | None = None
     extra: dict = field(default_factory=dict)  # 存储额外的配置字段
 
@@ -273,7 +289,8 @@ class AccountConfig:
         api_user = data.get("api_user", "")
         cookies = data.get("cookies", "")
         system_access_token = data.get("system_access_token", "")
-        xiaobai_token = data.get("xiaobai_token", "")
+        xiaobai_token_value = data.get("xiaobai_token")
+        xiaobai_token = XiaobaiTokenConfig.from_dict(xiaobai_token_value) if isinstance(xiaobai_token_value, dict) else None
         proxy = data.get("proxy")
 
         known_keys = {"provider", "name", "cookies", "api_user", "linux.do", "github", "site", "system_access_token", "xiaobai_token", "proxy"}
@@ -1118,10 +1135,17 @@ class AppConfig:
                 if has_xiaobai_token:
                     xiaobai_token_value = account.get("xiaobai_token")
 
-                    if xiaobai_token_value:
-                        valid_xiaobai_token = True
+                    if not isinstance(xiaobai_token_value, dict):
+                        print(
+                            f"⚠️ {account_name} xiaobai_token must be an object "
+                            f"with access_token and refresh_token"
+                        )
+                    elif not xiaobai_token_value.get("access_token"):
+                        print(f"⚠️ {account_name} xiaobai_token.access_token is empty")
+                    elif not xiaobai_token_value.get("refresh_token"):
+                        print(f"⚠️ {account_name} xiaobai_token.refresh_token is empty")
                     else:
-                        print(f"⚠️ {account_name} xiaobai_token is empty")
+                        valid_xiaobai_token = True
 
                 # 验证 cookies 配置
                 valid_cookies = False

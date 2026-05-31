@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
@@ -17,6 +18,73 @@ from checkin import CheckIn
 load_dotenv(override=True)
 
 BALANCE_HASH_FILE = "balance_hash.txt"
+
+
+def persist_xiaobai_token_updates(updates: list[dict]) -> None:
+    """将刷新后的小白 token 写入 GitHub Actions 后续步骤可读取的临时文件。"""
+    if not updates:
+        return
+
+    accounts_source = os.getenv("ACCOUNTS_SOURCE", "secret").lower()
+    if accounts_source == "input":
+        print("⚠️ Xiaobai token refreshed, but ACCOUNTS came from workflow input; GitHub secret will not be updated")
+        return
+
+    output_file = os.getenv("XIAOBAI_UPDATED_ACCOUNTS_FILE")
+    if not output_file:
+        print("⚠️ Xiaobai token refreshed, but XIAOBAI_UPDATED_ACCOUNTS_FILE is not configured")
+        return
+
+    accounts_str = os.getenv("ACCOUNTS")
+    if not accounts_str:
+        print("⚠️ Xiaobai token refreshed, but ACCOUNTS environment variable is missing")
+        return
+
+    try:
+        accounts_data = json.loads(accounts_str)
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Xiaobai token refreshed, but ACCOUNTS JSON cannot be parsed: {e}")
+        return
+
+    if not isinstance(accounts_data, list):
+        print("⚠️ Xiaobai token refreshed, but ACCOUNTS is not a JSON array")
+        return
+
+    updated_count = 0
+    for update in updates:
+        account_index = update.get("account_index")
+        if not isinstance(account_index, int) or account_index < 0 or account_index >= len(accounts_data):
+            print(f"⚠️ Skip Xiaobai token update with invalid account index: {account_index}")
+            continue
+
+        account = accounts_data[account_index]
+        if not isinstance(account, dict):
+            print(f"⚠️ Skip Xiaobai token update for non-object account index: {account_index}")
+            continue
+
+        account["xiaobai_token"] = {
+            "access_token": update["access_token"],
+            "refresh_token": update["refresh_token"],
+        }
+        updated_count += 1
+
+    if updated_count == 0:
+        print("⚠️ Xiaobai token refreshed, but no ACCOUNTS entry was updated")
+        return
+
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(accounts_data, f, ensure_ascii=False, separators=(",", ":"))
+
+    runner_temp = os.getenv("RUNNER_TEMP") or output_dir or "."
+    flag_file = os.path.join(runner_temp, "xiaobai_accounts_updated.flag")
+    with open(flag_file, "w", encoding="utf-8") as f:
+        f.write("true")
+
+    print(f"✅ Prepared refreshed Xiaobai token update for {updated_count} account(s)")
 
 
 def generate_balance_hash(balances: dict) -> str:
@@ -63,6 +131,7 @@ async def main():
     notification_content = []
     current_balances = {}
     need_notify = False  # 是否需要发送通知
+    xiaobai_token_updates = []
 
     for i, account_config in enumerate(app_config.accounts):
         account_key = f"account_{i + 1}"
@@ -97,6 +166,19 @@ async def main():
             for auth_method, success, user_info in results:
                 status = "✅ SUCCESS" if success else "❌ FAILED"
                 account_result += f"  {status} with {auth_method} authentication\n"
+
+                if user_info and user_info.get("xiaobai_token_refreshed"):
+                    refreshed_token = user_info.get("xiaobai_token", {})
+                    access_token = refreshed_token.get("access_token")
+                    refresh_token = refreshed_token.get("refresh_token")
+                    if access_token and refresh_token:
+                        xiaobai_token_updates.append(
+                            {
+                                "account_index": i,
+                                "access_token": access_token,
+                                "refresh_token": refresh_token,
+                            }
+                        )
 
                 if success and user_info and user_info.get("success"):
                     account_success = True
@@ -163,6 +245,9 @@ async def main():
     # 保存当前余额hash
     if current_balance_hash:
         save_balance_hash(BALANCE_HASH_FILE, current_balance_hash)
+
+    # 保存刷新后的小白 token，供 GitHub Actions 后续步骤回写 Environment Secret
+    persist_xiaobai_token_updates(xiaobai_token_updates)
 
     if need_notify and notification_content:
         # 构建通知内容

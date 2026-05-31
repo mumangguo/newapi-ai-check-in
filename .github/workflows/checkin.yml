@@ -104,8 +104,11 @@ jobs:
           balance-hash-
 
     - name: 执行签到
+      id: checkin
       env:
         ACCOUNTS: ${{ inputs.accounts || secrets.ACCOUNTS }}
+        ACCOUNTS_SOURCE: ${{ inputs.accounts != '' && 'input' || 'secret' }}
+        XIAOBAI_UPDATED_ACCOUNTS_FILE: ${{ runner.temp }}/updated_accounts.json
         ACCOUNTS_LINUX_DO: ${{ secrets.ACCOUNTS_LINUX_DO }}
         ACCOUNTS_GITHUB: ${{ secrets.ACCOUNTS_GITHUB }}
         PROVIDERS: ${{ inputs.providers || secrets.PROVIDERS }}
@@ -141,6 +144,38 @@ jobs:
         }
         # 执行签到
         uv run python -u main.py
+        $exitCode = $LASTEXITCODE
+
+        if (Test-Path "$env:RUNNER_TEMP\xiaobai_accounts_updated.flag") {
+          echo "xiaobai_accounts_updated=true" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "xiaobai_accounts_updated=false" >> $env:GITHUB_OUTPUT
+        }
+
+        exit $exitCode
+
+    - name: 更新小白 token 到 GitHub Environment Secret
+      if: always() && steps.checkin.outputs.xiaobai_accounts_updated == 'true' && inputs.accounts == ''
+      env:
+        GH_TOKEN: ${{ secrets.ACTIONS_UPDATE_TOKEN }}
+      shell: pwsh
+      run: |
+        if (-not $env:GH_TOKEN) {
+          Write-Error "ACTIONS_UPDATE_TOKEN is not configured; cannot update ACCOUNTS environment secret"
+          exit 1
+        }
+
+        gh secret set ACCOUNTS `
+          --env production `
+          --repo "${{ github.repository }}" `
+          --body-file "${{ runner.temp }}/updated_accounts.json"
+
+        Write-Host "✅ Updated ACCOUNTS environment secret with refreshed Xiaobai tokens"
+
+    - name: 跳过小白 token 回写说明
+      if: always() && steps.checkin.outputs.xiaobai_accounts_updated == 'true' && inputs.accounts != ''
+      run: |
+        echo "Xiaobai token was refreshed, but this run used workflow_dispatch inputs.accounts, so ACCOUNTS was not updated."
 
     - name: 保存登录状态缓存
       if: hashFiles('storage-states/*.json') != ''

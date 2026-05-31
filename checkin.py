@@ -21,6 +21,9 @@ from utils.topup import topup
 from utils.get_headers import get_browser_headers, get_curl_cffi_impersonate, print_browser_headers
 from utils.mask_utils import mask_username
 
+XIAOBAI_AUTH_ME_URL = "https://token.dialoguedui.com/api/v1/auth/me?timezone=Asia/Shanghai"
+XIAOBAI_REFRESH_URL = "https://token.dialoguedui.com/api/v1/auth/refresh"
+
 class CheckIn:
     """newapi.ai 签到管理类"""
 
@@ -1138,9 +1141,134 @@ class CheckIn:
         finally:
             session.close()
 
+    def _build_xiaobai_headers(self, access_token: str, common_headers: dict) -> dict:
+        """构建小白 token 请求头"""
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Referer": f"{self.provider_config.origin}/dashboard",
+            "User-Agent": common_headers.get("User-Agent", ""),
+        }
+
+    def _check_xiaobai_access_token(
+        self,
+        session: curl_requests.Session,
+        access_token: str,
+        common_headers: dict,
+    ) -> tuple[bool, dict]:
+        """验证小白 access token 是否有效"""
+        headers = self._build_xiaobai_headers(access_token, common_headers)
+
+        try:
+            response = session.get(XIAOBAI_AUTH_ME_URL, headers=headers, timeout=30)
+            if response.status_code == 200:
+                data = response_resolve(response, "xiaobai_auth_me", self.account_name)
+                if data is None:
+                    return False, {"error": "Xiaobai token validation failed: Invalid response type (saved to logs)"}
+
+                account_info = data.get("data", {}) if isinstance(data, dict) else {}
+                print(f"✅ {self.account_name}: Xiaobai access token is valid")
+                return True, {"valid": True, "account_info": account_info}
+
+            if response.status_code == 401:
+                print(f"⚠️ {self.account_name}: Xiaobai access token expired")
+                return False, {"expired": True, "status_code": 401}
+
+            print(f"❌ {self.account_name}: Xiaobai token validation failed - HTTP {response.status_code}")
+            return False, {"error": f"Xiaobai token validation failed: HTTP {response.status_code}", "status_code": response.status_code}
+        except Exception as e:
+            print(f"❌ {self.account_name}: Xiaobai token validation error - {e}")
+            return False, {"error": f"Xiaobai token validation error - {e}"}
+
+    def _refresh_xiaobai_token(
+        self,
+        session: curl_requests.Session,
+        access_token: str,
+        refresh_token: str,
+        common_headers: dict,
+    ) -> tuple[bool, dict]:
+        """使用 refresh token 刷新小白双 token"""
+        print(f"🔄 {self.account_name}: Refreshing Xiaobai token")
+        headers = self._build_xiaobai_headers(access_token, common_headers)
+        headers["Authorization"] = "Bearer"
+
+        try:
+            response = session.post(
+                XIAOBAI_REFRESH_URL,
+                headers=headers,
+                json={"refresh_token": refresh_token},
+                timeout=30,
+            )
+            if response.status_code != 200:
+                print(f"❌ {self.account_name}: Xiaobai token refresh failed - HTTP {response.status_code}")
+                return False, {"error": f"Xiaobai token refresh failed: HTTP {response.status_code}"}
+
+            data = response_resolve(response, "xiaobai_token_refresh", self.account_name)
+            if data is None:
+                return False, {"error": "Xiaobai token refresh failed: Invalid response type (saved to logs)"}
+
+            if data.get("code") != 0:
+                error_msg = data.get("message") or data.get("msg") or "Xiaobai token refresh failed"
+                print(f"❌ {self.account_name}: {error_msg}")
+                return False, {"error": error_msg}
+
+            token_data = data.get("data", {})
+            new_access_token = token_data.get("access_token")
+            new_refresh_token = token_data.get("refresh_token")
+            if not new_access_token or not new_refresh_token:
+                return False, {"error": "Xiaobai token refresh response missing access_token or refresh_token"}
+
+            print(f"✅ {self.account_name}: Xiaobai token refreshed successfully")
+            print(f"::add-mask::{new_access_token}")
+            print(f"::add-mask::{new_refresh_token}")
+            return True, {"access_token": new_access_token, "refresh_token": new_refresh_token}
+        except Exception as e:
+            print(f"❌ {self.account_name}: Xiaobai token refresh error - {e}")
+            return False, {"error": f"Xiaobai token refresh error - {e}"}
+
+    def _ensure_xiaobai_access_token(
+        self,
+        session: curl_requests.Session,
+        access_token: str,
+        refresh_token: str,
+        common_headers: dict,
+    ) -> tuple[bool, dict]:
+        """确保小白 access token 可用，过期时刷新双 token"""
+        valid, check_result = self._check_xiaobai_access_token(session, access_token, common_headers)
+        if valid:
+            return True, {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "refreshed": False,
+                "account_info": check_result.get("account_info", {}),
+            }
+
+        if not check_result.get("expired"):
+            return False, check_result
+
+        refreshed, refresh_result = self._refresh_xiaobai_token(session, access_token, refresh_token, common_headers)
+        if not refreshed:
+            return False, refresh_result
+
+        new_access_token = refresh_result["access_token"]
+        new_refresh_token = refresh_result["refresh_token"]
+        valid, validate_result = self._check_xiaobai_access_token(session, new_access_token, common_headers)
+        if not valid:
+            error_msg = validate_result.get("error", "new Xiaobai access token validation failed")
+            return False, {"error": f"Xiaobai token refreshed but validation failed: {error_msg}"}
+
+        return True, {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "refreshed": True,
+            "account_info": validate_result.get("account_info", {}),
+        }
+
     async def check_in_with_xiaobai_token(
         self,
         access_token: str,
+        refresh_token: str,
         common_headers: dict,
     ) -> tuple[bool, dict]:
         """使用小白 token 执行签到操作"""
@@ -1156,12 +1284,20 @@ class CheckIn:
             print(f"ℹ️ {self.account_name}: Using curl_cffi Session with impersonate={impersonate}")
 
         try:
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                "User-Agent": common_headers.get("User-Agent", ""),
-            }
+            token_ok, token_result = self._ensure_xiaobai_access_token(
+                session,
+                access_token,
+                refresh_token,
+                common_headers,
+            )
+            if not token_ok:
+                return False, {"error": token_result.get("error", "Xiaobai token validation failed")}
+
+            current_access_token = token_result["access_token"]
+            current_refresh_token = token_result["refresh_token"]
+            token_refreshed = token_result.get("refreshed", False)
+            account_info = token_result.get("account_info", {})
+            headers = self._build_xiaobai_headers(current_access_token, common_headers)
 
             status_response = session.get(self.provider_config.get_status_url(), headers=headers, timeout=30)
             if status_response.status_code != 200:
@@ -1223,17 +1359,26 @@ class CheckIn:
                     current_streak += 1
                     print(f"✅ {self.account_name}: Xiaobai check-in successful! Reward: {reward}")
 
+            balance = account_info.get("balance", 0) if isinstance(account_info, dict) else 0
             display = (
-                f"Xiaobai checked today: {'yes' if signed_today else 'no'}, "
+                f"Xiaobai balance: {balance}, "
+                f"checked today: {'yes' if signed_today else 'no'}, "
                 f"streak: {current_streak}, reward: {reward}"
             )
-            return True, {
+            result = {
                 "success": True,
-                "quota": reward,
+                "quota": balance,
                 "used_quota": 0,
                 "bonus_quota": current_streak,
                 "display": display,
             }
+            if token_refreshed:
+                result["xiaobai_token_refreshed"] = True
+                result["xiaobai_token"] = {
+                    "access_token": current_access_token,
+                    "refresh_token": current_refresh_token,
+                }
+            return True, result
         except Exception as e:
             print(f"❌ {self.account_name}: Error occurred during xiaobai check-in process - {e}")
             return False, {"error": f"Xiaobai check-in process error - {e}"}
@@ -2084,7 +2229,9 @@ class CheckIn:
             print(f"\nℹ️ {self.account_name}: Trying xiaobai token authentication")
             try:
                 success, user_info = await self.check_in_with_xiaobai_token(
-                    xiaobai_token_data, common_headers
+                    xiaobai_token_data.access_token,
+                    xiaobai_token_data.refresh_token,
+                    common_headers,
                 )
                 if success:
                     print(f"✅ {self.account_name}: Xiaobai token authentication successful")

@@ -189,7 +189,7 @@ Affs:
 - `proxy` (可选)：单个账号代理配置，支持 `http`、`socks5` 代理
 - `cookies`(可选)：用于身份验证的 cookies 数据
 - `system_access_token`(可选)：系统访问令牌，通过 `Authorization: Bearer <token>` 方式认证签到
-- `xiaobai_token`(可选)：小白签到令牌，仅 `provider: "xiaobai"` 使用，只需配置 token 即可
+- `xiaobai_token`(可选)：小白签到令牌，仅 `provider: "xiaobai"` 使用，必须同时配置 `access_token` 和 `refresh_token`
 - `api_user`(cookies 或 system_access_token 设置时必需)：用于请求头的 new-api-user 参数
 - `linux.do`(可选)：用于登录身份验证，支持三种格式：
   - `true`：使用 `LINUX_DO_ACCOUNTS` 中的全局账号
@@ -274,15 +274,25 @@ Affs:
 
 #### 3.8 如何配置小白 token
 
-小白渠道使用独立的签到接口，不需要 `api_user`，只需要在账号配置里设置 `provider: "xiaobai"` 和 `xiaobai_token`。
+小白渠道使用独立的签到接口，不需要 `api_user`，需要在账号配置里设置 `provider: "xiaobai"` 和双 token 格式的 `xiaobai_token`。脚本会在 access token 过期时使用 refresh token 自动续签，并在 GitHub Actions 中回写更新后的 `ACCOUNTS`。小白的 `/api/v1/auth/me` 会返回账号信息，脚本会使用其中的 `balance` 展示当前余额。
 
 ```json
 {
   "name": "小白签到",
   "provider": "xiaobai",
-  "xiaobai_token": "eyJ..."
+  "xiaobai_token": {
+    "access_token": "eyJ...",
+    "refresh_token": "rt_xxx"
+  }
 }
 ```
+
+如果需要在 GitHub Actions 中自动保存刷新后的 token，请在仓库 `Settings -> Environments -> production -> Environment secrets` 中额外添加：
+
+- Name: `ACTIONS_UPDATE_TOKEN`
+- Value: 具备更新当前仓库 Environment Secret 权限的 GitHub PAT
+
+刷新后的 token 会通过 `gh secret set ACCOUNTS --env production` 写回 `ACCOUNTS`。如果手动触发 workflow 时填写了 `accounts` 输入，本次使用的是临时输入值，刷新结果不会回写到 `ACCOUNTS`。
 
 #### 3.9 `GitHub` 在新设备上登录会有两次验证
 
